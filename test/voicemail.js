@@ -246,6 +246,19 @@ async function ringAndGetDialAction() {
   // ---- text-message toggle ----
   const OWNER = { From: '+1 (555) 555-0100' };
 
+  await test('sms: with NOTIFY_SMS=0 the app sends no text of its own; the setting still changes and push confirms', async () => {
+    process.env.NOTIFY_SMS = '0';
+    db.clear();
+    notices = [];
+    const res = await call(sms, '/api/sms', { ...OWNER, Body: 'VM ON' });
+    process.env.NOTIFY_SMS = '1';
+    assert.strictEqual(db.get('voicemail_enabled'), '1');
+    assert.doesNotMatch(res.body, /<Message/, 'no text reply on a shared or unregistered number');
+    assert.match(notices[0].body, /Voicemail is now ON\./);
+  });
+
+  process.env.NOTIFY_SMS = '1'; // the remaining sms tests cover the normal (text reply) behavior; notifications are faked here
+
   await test('sms: VM ON and VM OFF from your phone change the setting', async () => {
     db.clear();
     notices = [];

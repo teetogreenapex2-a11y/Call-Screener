@@ -51,5 +51,7 @@ module.exports = async function handler(req, res) {
 
   // Text replies from a new Twilio number can be filtered by carriers, so also send a push notification.
   await notify.send({ title: 'Voicemail setting', body: message, sms: false });
-  return xml(res, message);
+  // With NOTIFY_SMS=0 (new number not yet registered for texting, or a number shared with another app)
+  // this app never sends a text of its own, so the reply is left empty and only the push confirms.
+  return xml(res, process.env.NOTIFY_SMS === '0' ? '' : message);
 };
