@@ -4,7 +4,7 @@
   "private": true,
   "description": "AI call screener: Twilio answers, Claude decides, you get a text summary",
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js && node test/voicemail.js"
   },
   "engines": {
     "node": ">=20"

@@ -4,7 +4,7 @@ const { isValid } = require('../lib/twilio-verify');
 const { cfg, greeting } = require('../lib/config');
 const claude = require('../lib/claude');
 const notify = require('../lib/notify');
-const { VoiceResponse, decode, sayTo, buildGather, reply, forbidden } = require('../lib/twiml');
+const { VoiceResponse, decode, encodeInfo, sayTo, buildGather, reply, forbidden } = require('../lib/twiml');
 
 module.exports = async function handler(req, res) {
   if (!isValid(req)) return forbidden(res);
@@ -51,7 +51,12 @@ module.exports = async function handler(req, res) {
       vr.hangup();
     } else {
       sayTo(vr, c, 'Thank you. Please hold while I connect you.');
-      vr.dial({ timeout: 25, answerOnBridge: true }, c.ownerPhone);
+      // If you don't pick up, /api/dial-done takes over (voicemail or a goodbye, depending on your setting).
+      const info = encodeInfo({ s: d.summary, c: d.category, f: from });
+      vr.dial(
+        { timeout: c.ringSeconds, answerOnBridge: true, action: `/api/dial-done?i=${info}`, method: 'POST' },
+        c.ownerPhone
+      );
     }
     await notify.send({ title: 'Call coming through', body: `Ringing you [${d.category}]: ${d.summary} (${from})` });
     return reply(res, vr);
