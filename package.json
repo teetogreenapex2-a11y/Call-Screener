@@ -1,0 +1,16 @@
+{
+  "name": "call-screener",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI call screener: Twilio answers, Claude decides, you get a text summary",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "twilio": "^6.1.2"
+  }
+}
