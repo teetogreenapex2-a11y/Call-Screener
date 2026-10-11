@@ -1,9 +1,12 @@
-// Data and actions for the phone app (public/index.html). Everything needs your ADMIN_KEY.
+// Data and actions for the phone app (public/index.html).
+// Your ADMIN_KEY opens your own app; a customer's personal key opens theirs.
 const { keyOk, requestKey } = require('../lib/admin');
 const settings = require('../lib/settings');
 const contacts = require('../lib/contacts');
 const calls = require('../lib/calls');
 const store = require('../lib/store');
+const tenant = require('../lib/tenant');
+const users = require('../lib/users');
 
 function json(res, status, obj) {
   res.statusCode = status;
@@ -12,33 +15,49 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-async function snapshot() {
-  const [voicemail, list, count] = await Promise.all([
-    settings.voicemailEnabled(),
-    calls.list(),
-    contacts.count().catch(() => 0),
+async function whoIs(req) {
+  const k = requestKey(req);
+  if (keyOk(k)) return tenant.owner();
+  return users.byToken(k);
+}
+
+async function snapshot(t) {
+  const ns = tenant.ns(t);
+  const [voicemail, rawCalls, count, names, synced] = await Promise.all([
+    settings.voicemailEnabled(t),
+    calls.list(ns),
+    contacts.count(ns).catch(() => 0),
+    contacts.loadNames(ns),
+    contacts.lastSynced(ns),
   ]);
-  return { voicemail, calls: list, contacts: count };
+  const list = rawCalls.map((c) => ({ ...c, name: names[contacts.norm(c.f)] || '' }));
+  const me = t.owner
+    ? { name: t.name, number: process.env.TWILIO_PHONE_NUMBER || '', ntfy: t.ntfy }
+    : { name: t.name, number: t.number, ntfy: t.ntfy };
+  return { voicemail, calls: list, contacts: count, synced, me };
 }
 
 module.exports = async function handler(req, res) {
-  if (!keyOk(requestKey(req))) return json(res, 403, { error: 'forbidden' });
   if (!store.configured()) return json(res, 200, { error: 'The settings database is not connected in Vercel yet.' });
+  const t = await whoIs(req);
+  if (!t) return json(res, 403, { error: 'forbidden' });
+  const ns = tenant.ns(t);
 
   try {
     if (req.method === 'POST') {
       const b = req.body || {};
-      if (b.action === 'voicemail') await settings.setVoicemail(Boolean(b.on));
-      else if (b.action === 'allow') await contacts.add([b.number]);
-      else if (b.action === 'unallow') await contacts.remove(b.number);
+      if (b.action === 'voicemail') await settings.setVoicemail(Boolean(b.on), t);
+      else if (b.action === 'allow') await contacts.add([b.number], ns);
+      else if (b.action === 'unallow') await contacts.remove(b.number, ns);
       else if (b.action === 'import') {
-        const nums = Array.isArray(b.numbers) ? b.numbers.slice(0, 20000) : [];
-        if (b.replace) await contacts.replaceAll(nums);
-        else await contacts.add(nums);
-      } else if (b.action === 'clear-calls') await store.set('calls', '[]');
+        // entries: [{ n, name }] from the phone's contacts; numbers: plain list.
+        const entries = Array.isArray(b.entries) ? b.entries.slice(0, 20000) : (Array.isArray(b.numbers) ? b.numbers.slice(0, 20000) : []).map((n) => ({ n }));
+        await contacts.importEntries(entries, ns, Boolean(b.replace));
+      } else if (b.action === 'contacts') return json(res, 200, { contactList: await contacts.listAll(ns) });
+      else if (b.action === 'clear-calls') await store.set(calls.keyFor(ns), '[]');
       else if (b.action !== 'refresh') return json(res, 400, { error: 'unknown action' });
     }
-    return json(res, 200, await snapshot());
+    return json(res, 200, await snapshot(t));
   } catch (err) {
     console.error('app request failed:', err && err.message);
     return json(res, 200, { error: "Couldn't save that. Try again in a minute." });

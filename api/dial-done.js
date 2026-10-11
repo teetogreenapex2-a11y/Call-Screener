@@ -6,14 +6,17 @@ const notify = require('../lib/notify');
 const calls = require('../lib/calls');
 const settings = require('../lib/settings');
 const store = require('../lib/store');
+const tenant = require('../lib/tenant');
 const { VoiceResponse, sayTo, encodeInfo, decodeInfo, reply, forbidden } = require('../lib/twiml');
 
 module.exports = async function handler(req, res) {
   if (!isValid(req)) return forbidden(res);
 
-  const c = cfg();
   const url = new URL(req.url, 'http://localhost');
   const info = decodeInfo(url.searchParams.get('i'));
+  const t = await tenant.forId(info.u);
+  const ns = tenant.ns(t);
+  const c = cfg(t);
   let status = String((req.body || {}).DialCallStatus || '').toLowerCase();
 
   // You picked up but pressed 2 (or nothing) on the whisper: treat it like a call you couldn't take.
@@ -28,25 +31,25 @@ module.exports = async function handler(req, res) {
   const entry = { f: info.f, c: info.c, s: info.s };
 
   if (status === 'completed' || status === 'answered') {
-    await calls.log({ ...entry, o: 'answered' });
+    await calls.log({ ...entry, o: 'answered' }, ns);
     vr.hangup();
     return reply(res, vr);
   }
 
   if (status === 'canceled') {
-    await calls.log({ ...entry, o: 'missed' });
-    await notify.send({ title: 'Missed call', body: `Caller hung up while ringing ${detail}` });
+    await calls.log({ ...entry, o: 'missed' }, ns);
+    await notify.send({ title: 'Missed call', body: `Caller hung up while ringing ${detail}`, ...tenant.notifyOpts(t) });
     vr.hangup();
     return reply(res, vr);
   }
 
   const sorry = `Sorry, ${c.ownerName} isn't available right now.`;
 
-  if (!(await settings.voicemailEnabled())) {
+  if (!(await settings.voicemailEnabled(t))) {
     sayTo(vr, c, `${sorry} Goodbye.`);
     vr.hangup();
-    await calls.log({ ...entry, o: 'missed' });
-    await notify.send({ title: 'Missed call', body: `Missed call ${detail}` });
+    await calls.log({ ...entry, o: 'missed' }, ns);
+    await notify.send({ title: 'Missed call', body: `Missed call ${detail}`, ...tenant.notifyOpts(t) });
     return reply(res, vr);
   }
 

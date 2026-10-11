@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>Screener admin</title>
+<style>
+body{margin:0;background:#0f172a;color:#f1f5f9;font:16px/1.4 system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:22px}h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;margin:24px 0 8px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:14px 16px;margin-bottom:10px}
+input{font:inherit;width:100%;padding:11px;margin:4px 0 10px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#f1f5f9}
+button{font:inherit;color:#fff;background:#3b82f6;border:0;border-radius:10px;padding:11px 14px;margin:4px 8px 0 0}
+button.alt{background:#334155}button.del{background:#ef4444}
+.sub{color:#94a3b8;font-size:14px}#msg{margin:10px 0;min-height:20px}
+.link{word-break:break-all;background:#0f172a;border-radius:8px;padding:8px;margin-top:8px;font-size:14px}
+</style></head><body><main>
+<h1>Screener admin</h1>
+<div id="login" class="card" hidden>
+  <input type="password" id="k" placeholder="ADMIN_KEY"><button id="enter">Open</button>
+</div>
+<div id="app" hidden>
+  <h2>Add a customer</h2>
+  <div class="card">
+    <input id="name" placeholder="Name (what the AI says, e.g. Mike)">
+    <input id="cell" type="tel" placeholder="Their cell number">
+    <input id="area" type="tel" placeholder="Area code for their new number (optional)">
+    <input id="ctx" placeholder="Who counts as legit for them (optional)">
+    <button id="create">Buy number and create</button>
+    <div class="sub">This buys a Twilio number (about $1.15 a month) right away.</div>
+    <div id="made"></div>
+  </div>
+  <div id="msg"></div>
+  <h2>Customers</h2>
+  <div id="list"></div>
+</div>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var KEY='';try{KEY=localStorage.getItem('adminOnly')||''}catch(e){}
+function msg(s){$('msg').textContent=s||''}
+function api(body){return fetch('/api/admin',{method:body?'POST':'GET',headers:{'Content-Type':'application/json','x-admin-key':KEY},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()})}
+function show(w){$('login').hidden=w!=='login';$('app').hidden=w!=='app'}
+function render(d){
+  if(d.error==='forbidden'){show('login');return}
+  show('app');if(d.error){msg(d.error);return}
+  var box=$('list');box.textContent='';
+  if(!d.users.length){var e=document.createElement('div');e.className='sub';e.textContent='No customers yet.';box.appendChild(e)}
+  d.users.forEach(function(u){
+    var c=document.createElement('div');c.className='card';
+    var t=document.createElement('div');t.textContent=u.name+'  '+u.cell;
+    var s=document.createElement('div');s.className='sub';s.textContent='Screening number '+u.number+'  added '+new Date(u.created).toLocaleDateString();
+    var b1=document.createElement('button');b1.className='alt';b1.textContent='New login link';
+    b1.onclick=function(){api({action:'newlink',id:u.id}).then(function(r){render(r);if(r.link)showLink(r.link)})};
+    var b2=document.createElement('button');b2.className='del';b2.textContent='Remove and release number';
+    b2.onclick=function(){if(confirm('Remove '+u.name+' and release '+u.number+'?'))api({action:'delete',id:u.id}).then(render)};
+    c.appendChild(t);c.appendChild(s);c.appendChild(b1);c.appendChild(b2);box.appendChild(c)});
+}
+function showLink(l){var m=$('made');m.textContent='';var d=document.createElement('div');d.className='link';d.textContent=l;m.appendChild(d);
+  var p=document.createElement('div');p.className='sub';p.textContent='Send this private link to the customer. It is shown only now.';m.appendChild(p)}
+$('enter').onclick=function(){KEY=$('k').value.trim();try{localStorage.setItem('adminOnly',KEY)}catch(e){}api().then(render)};
+$('create').onclick=function(){
+  msg('Buying a number...');$('made').textContent='';
+  api({action:'create',name:$('name').value,cell:$('cell').value,areaCode:$('area').value,context:$('ctx').value}).then(function(r){
+    if(r.error){msg(r.error);return}msg('Created '+r.created.name+' with number '+r.created.number+'.');showLink(r.link);render(r);
+    $('name').value=$('cell').value=$('area').value=$('ctx').value=''})
+  .catch(function(){msg('Could not create. Try again.')})};
+if(KEY)api().then(render);else show('login');
+})();
+</script></main></body></html>

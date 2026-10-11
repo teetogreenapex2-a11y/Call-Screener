@@ -3,14 +3,15 @@
 const { isValid } = require('../lib/twilio-verify');
 const { cfg } = require('../lib/config');
 const store = require('../lib/store');
+const tenant = require('../lib/tenant');
 const { VoiceResponse, sayTo, decodeInfo, reply, forbidden } = require('../lib/twiml');
 
 module.exports = async function handler(req, res) {
   if (!isValid(req)) return forbidden(res);
 
-  const c = cfg();
   const url = new URL(req.url, 'http://localhost');
   const info = decodeInfo(url.searchParams.get('i'));
+  const c = cfg(await tenant.forId(info.u));
   const b = req.body || {};
   const vr = new VoiceResponse();
 

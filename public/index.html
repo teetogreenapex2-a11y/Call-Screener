@@ -25,7 +25,7 @@ h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute
 .switch input:checked+span:before{transform:translateX(24px)}
 button,.btn{font:inherit;color:var(--text);background:var(--blue);border:0;border-radius:10px;padding:11px 14px;margin:6px 8px 0 0}
 button.alt{background:var(--line)}
-input[type=tel],input[type=password]{font:inherit;width:100%;padding:11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+input[type=tel],input[type=password],input[type=search]{font:inherit;width:100%;padding:11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .call .top{display:flex;justify-content:space-between;gap:8px;font-size:14px;color:var(--mute)}
 .call .sum{margin:4px 0 0}
 .tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;margin-right:6px;color:#0f172a}
@@ -33,6 +33,14 @@ input[type=tel],input[type=password]{font:inherit;width:100%;padding:11px;border
 .quote{margin:8px 0 0;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:15px}
 audio{width:100%;margin-top:8px}
 #msg{min-height:20px;color:var(--mute);font-size:14px;margin-top:8px}
+.code{display:block;color:var(--text);word-break:break-all;background:var(--bg);border-radius:8px;padding:8px 10px;margin:6px 0;font:14px ui-monospace,monospace;text-decoration:none}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.chip{background:var(--card);border:1px solid var(--line);color:var(--mute);border-radius:20px;padding:6px 14px;margin:0;font-size:14px}
+.chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.name{color:var(--text);font-weight:600}
+.warn{color:var(--amber)}
+.crow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.crow button{margin:0;padding:6px 10px;font-size:14px}
 .empty{color:var(--mute);text-align:center;padding:18px}
 #login{margin-top:40px}
 </style>
@@ -57,9 +65,20 @@ audio{width:100%;margin-top:8px}
       <label class="switch"><input type="checkbox" id="vm"><span></span></label>
     </div>
 
+    <h2>Setup</h2>
+    <div class="card" id="setup" hidden>
+      <div>Your screening number: <b id="mynum"></b></div>
+      <div class="sub" style="margin-top:8px">1. Tap each line on your phone to set up forwarding, then press call. Missed calls then go to the screener.</div>
+      <a class="code" id="f1"></a><a class="code" id="f2"></a><a class="code" id="f3"></a>
+      <div class="sub">To turn forwarding off, dial <b>##004#</b>.</div>
+      <div class="sub" style="margin-top:8px">2. Install the free <b>ntfy</b> app and subscribe to this topic to get call alerts:</div>
+      <div class="code" id="topic"></div>
+    </div>
+
     <h2>Ring-through contacts</h2>
     <div class="card">
       <div><b id="cn">0</b> numbers ring your phone directly, with no screening.</div>
+      <div class="sub" id="synced"></div>
       <button id="pick" hidden>Import from phone contacts</button>
       <button class="alt" id="filebtn">Load .vcf / .csv file</button>
       <input type="file" id="file" accept=".vcf,.csv,.txt" hidden>
@@ -67,9 +86,17 @@ audio{width:100%;margin-top:8px}
       <button id="add">Add number</button>
       <button class="alt" id="rem">Remove number</button>
       <div id="msg"></div>
+      <button class="alt" id="viewc">View contact list</button>
+      <div id="clist" hidden>
+        <input type="search" id="csearch" placeholder="Search name or number" style="margin-top:10px">
+        <div id="crows"></div>
+      </div>
     </div>
 
     <h2>Recent calls</h2>
+    <div class="chips" id="chips">
+      <button class="chip on" data-f="all">All</button><button class="chip" data-f="missed">Missed</button><button class="chip" data-f="voicemail">Voicemail</button><button class="chip" data-f="blocked">Blocked</button>
+    </div>
     <div id="calls"></div>
     <button class="alt" id="refresh">Refresh</button>
     <button class="alt" id="signout">Sign out</button>
@@ -119,13 +146,39 @@ audio{width:100%;margin-top:8px}
     $('vm').checked = d.voicemail;
     $('vmsub').textContent = d.voicemail ? 'Callers you miss can leave a message.' : 'Callers you miss hear a polite goodbye.';
     $('cn').textContent = d.contacts;
+    var sy = $('synced');
+    if (!d.synced) { sy.textContent = 'Never loaded from your phone. Tap Import to add your contacts.'; sy.className = 'sub warn'; }
+    else {
+      var days = Math.floor((Date.now() - d.synced) / 86400000);
+      var old = days >= 7;
+      sy.textContent = 'Last loaded from your phone: ' + (days < 1 ? 'today' : days + (days === 1 ? ' day ago' : ' days ago')) + (old ? '. Import again to pick up new contacts.' : '.');
+      sy.className = old ? 'sub warn' : 'sub';
+    }
+    if (d.me && d.me.number) {
+      var n = String(d.me.number).replace(/\D/g, '').slice(-10);
+      $('mynum').textContent = nice(n);
+      var codes = ['**61*+1' + n + '**20#', '**67*+1' + n + '#', '**62*+1' + n + '#'];
+      ['f1', 'f2', 'f3'].forEach(function (id, i) { $(id).textContent = codes[i]; $(id).href = 'tel:' + codes[i].replace(/#/g, '%23'); });
+      $('topic').textContent = d.me.ntfy || '';
+      $('setup').hidden = false;
+    }
     $('status').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    LAST = d;
+    drawCalls();
+  }
+
+  var LAST = null, FILTER = 'all';
+  function drawCalls() {
+    if (!LAST) return;
     var box = $('calls'); box.textContent = '';
-    if (!d.calls.length) { var e = document.createElement('div'); e.className = 'empty'; e.textContent = 'No calls yet. Screened calls will show up here.'; box.appendChild(e); }
-    d.calls.forEach(function (c) {
+    var shown = LAST.calls.filter(function (c) { return FILTER === 'all' || c.o === FILTER; });
+    if (!shown.length) { var e = document.createElement('div'); e.className = 'empty'; e.textContent = LAST.calls.length ? 'Nothing in this list.' : 'No calls yet. Screened calls will show up here.'; box.appendChild(e); }
+    shown.forEach(function (c) {
       var el = document.createElement('div'); el.className = 'card call';
       var top = document.createElement('div'); top.className = 'top';
-      var l = document.createElement('span'); l.textContent = nice(c.f);
+      var l = document.createElement('span');
+      if (c.name) { var nm = document.createElement('span'); nm.className = 'name'; nm.textContent = c.name; l.appendChild(nm); l.appendChild(document.createTextNode('  ' + nice(c.f))); }
+      else l.textContent = nice(c.f);
       var r = document.createElement('span'); r.textContent = ago(c.t);
       top.appendChild(l); top.appendChild(r);
       var sum = document.createElement('div'); sum.className = 'sum';
@@ -139,12 +192,61 @@ audio{width:100%;margin-top:8px}
     });
   }
 
+  var CONTACTS = [];
+  function drawContacts() {
+    var q = $('csearch').value.trim().toLowerCase(), qd = q.replace(/\D/g, '');
+    var rows = CONTACTS.filter(function (c) { return !q || (c.name && c.name.toLowerCase().indexOf(q) >= 0) || (qd && c.n.indexOf(qd) >= 0); });
+    var box = $('crows'); box.textContent = '';
+    if (!rows.length) { var e = document.createElement('div'); e.className = 'empty'; e.textContent = CONTACTS.length ? 'No match.' : 'The list is empty.'; box.appendChild(e); }
+    rows.slice(0, 200).forEach(function (c) {
+      var r = document.createElement('div'); r.className = 'crow';
+      var t = document.createElement('div');
+      if (c.name) { var nm = document.createElement('div'); nm.className = 'name'; nm.textContent = c.name; t.appendChild(nm); var s = document.createElement('div'); s.className = 'sub'; s.textContent = nice(c.n); t.appendChild(s); }
+      else t.textContent = nice(c.n);
+      var b = document.createElement('button'); b.className = 'alt'; b.textContent = 'Remove';
+      b.onclick = function () {
+        api({ action: 'unallow', number: c.n }).then(function (d) { render(d); CONTACTS = CONTACTS.filter(function (x) { return x.n !== c.n; }); drawContacts(); });
+      };
+      r.appendChild(t); r.appendChild(b); box.appendChild(r);
+    });
+    if (rows.length > 200) { var m = document.createElement('div'); m.className = 'sub'; m.textContent = 'Showing 200 of ' + rows.length + '. Search to narrow it down.'; box.appendChild(m); }
+  }
+  $('viewc').onclick = function () {
+    if (!$('clist').hidden) { $('clist').hidden = true; $('viewc').textContent = 'View contact list'; return; }
+    api({ action: 'contacts' }).then(function (d) { CONTACTS = d.contactList || []; $('clist').hidden = false; $('viewc').textContent = 'Hide contact list'; drawContacts(); });
+  };
+  $('csearch').oninput = drawContacts;
+
+  document.querySelectorAll('.chip').forEach(function (b) {
+    b.onclick = function () {
+      FILTER = b.getAttribute('data-f');
+      document.querySelectorAll('.chip').forEach(function (x) { x.classList.toggle('on', x === b); });
+      drawCalls();
+    };
+  });
+
   function show(which) { $('login').hidden = which !== 'login'; $('app').hidden = which !== 'app'; }
   function load() { return api().then(render).catch(function () { $('status').textContent = 'Offline. Try again.'; }); }
 
   function act(body, okMsg) {
     say('Saving...');
     return api(body).then(function (d) { render(d); say(d.error ? d.error : okMsg); }).catch(function () { say('Could not save. Try again.'); });
+  }
+
+  // Pulls name + number pairs out of a .vcf file (FN = full name). Cards with no number are skipped.
+  function parseVcf(txt) {
+    var out = [], seen = {};
+    txt.split(/BEGIN:VCARD/i).slice(1).forEach(function (card) {
+      var fn = (card.match(/^FN[^:\r\n]*:(.*)$/im) || [])[1] || '';
+      var tels = card.split(/\r?\n/).filter(function (l) { return /^(item\d+\.)?TEL/i.test(l); });
+      tels.forEach(function (l) {
+        var d = (l.split(':').slice(1).join(':') || '').replace(/\D/g, '');
+        if (d.length < 10 || d.length > 13) return;
+        d = d.slice(-10);
+        if (!seen[d]) { seen[d] = 1; out.push({ n: d, name: fn.trim() }); }
+      });
+    });
+    return out;
   }
 
   function extract(txt) {
@@ -165,17 +267,22 @@ audio{width:100%;margin-top:8px}
   $('file').onchange = function (e) {
     var f = e.target.files[0]; if (!f) return;
     var rd = new FileReader();
-    rd.onload = function () { var nums = extract(String(rd.result)); if (!nums.length) return say('No numbers found in that file.'); act({ action: 'import', numbers: nums }, nums.length + ' numbers added.'); };
+    rd.onload = function () {
+      var txt = String(rd.result);
+      var entries = /BEGIN:VCARD/i.test(txt) ? parseVcf(txt) : extract(txt).map(function (n) { return { n: n }; });
+      if (!entries.length) return say('No numbers found in that file.');
+      act({ action: 'import', entries: entries }, entries.length + ' numbers added.');
+    };
     rd.readAsText(f);
   };
   if (navigator.contacts && navigator.contacts.select) {
     $('pick').hidden = false;
     $('pick').onclick = function () {
-      navigator.contacts.select(['tel'], { multiple: true }).then(function (list) {
-        var nums = [];
-        list.forEach(function (c) { (c.tel || []).forEach(function (t) { nums = nums.concat(extract(t)); }); });
-        if (!nums.length) return say('No numbers selected.');
-        act({ action: 'import', numbers: nums }, nums.length + ' numbers added.');
+      navigator.contacts.select(['name', 'tel'], { multiple: true }).then(function (list) {
+        var entries = [];
+        list.forEach(function (c) { (c.tel || []).forEach(function (t) { extract(t).forEach(function (n) { entries.push({ n: n, name: (c.name && c.name[0]) || '' }); }); }); });
+        if (!entries.length) return say('No numbers selected.');
+        act({ action: 'import', entries: entries }, entries.length + ' numbers added.');
       }).catch(function () { say('Contact picker was closed.'); });
     };
   }

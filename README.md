@@ -20,6 +20,8 @@ You    -> text "VM ON" / "VM OFF" to the Twilio number -> /api/sms
 - `api/recording.js`, `api/transcription.js` - voicemail notifications (transcript + link)
 - `api/listen.js` - plays a voicemail from the signed link in the notification
 - `api/sms.js` - the text-message switch (only your own phone can use it); also `ALLOW 9195551234` / `UNALLOW 9195551234`
+- `api/admin.js`, `public/admin.html` - add and remove customers (buys their Twilio number and makes their private app link)
+- `lib/users.js`, `lib/tenant.js`, `lib/provision.js` - customer accounts, "whose call is this" lookup, number buying
 - `api/contacts.js` - page to load your contacts into the ring-through list (needs `ADMIN_KEY`)
 - `lib/contacts.js` - the ring-through list, kept in the database
 - `lib/claude.js` - the screening prompt and the decision logic (edit the rules here)
@@ -60,3 +62,12 @@ Open `https://YOUR-PROJECT.vercel.app/?key=YOUR_ADMIN_KEY` once in Chrome on you
 ## Whisper and declining
 
 When the AI puts a call through and you answer, you hear who it is and press 1 to connect or 2 (or nothing) to decline. A declined caller hears that you aren't available and, if voicemail is on, can leave a message. Set `WHISPER=off` to skip the whisper. Saved contacts ring straight through with no whisper.
+
+## Customers (multi-user)
+
+Open `https://YOUR-PROJECT.vercel.app/admin.html` and enter your `ADMIN_KEY`. Add a customer with their name and cell number (and an area code if you like). The app buys a Twilio number for them (about $1.15 a month), points it at this app, and gives you a private link to send them. Their link opens their own app with their own call list, voicemail switch and ring-through contacts, plus their screening number, one-tap forwarding codes and their own ntfy topic.
+
+- Your own number and settings keep working as before (calls to numbers that are not a customer's are yours).
+- Customers only ever get push alerts, never a text from your number.
+- Removing a customer releases their number and deletes their data. "New login link" invalidates the old link.
+- Cost control is not built yet: there is no per-customer call limit or billing. Keep the beta small.

@@ -23,6 +23,8 @@ const voice = require('../api/voice');
 const contactsApi = require('../api/contacts');
 const appApi = require('../api/app');
 const whisper = require('../api/whisper');
+const adminApi = require('../api/admin');
+const provision = require('../lib/provision');
 const claude = require('../lib/claude');
 const notify = require('../lib/notify');
 
@@ -51,6 +53,10 @@ global.fetch = async (url, opts = {}) => {
     if (dbDown) return new Response('{"error":"down"}', { status: 500 });
     const [cmd, key, val] = JSON.parse(opts.body);
     if (cmd === 'GET') return new Response(JSON.stringify({ result: db.has(key) ? db.get(key) : null }), { status: 200 });
+    if (cmd === 'DEL') {
+      const had = db.delete(key);
+      return new Response(JSON.stringify({ result: had ? 1 : 0 }), { status: 200 });
+    }
     if (cmd === 'SET') {
       db.set(key, val);
       return new Response('{"result":"OK"}', { status: 200 });
@@ -493,6 +499,214 @@ async function ringAndGetDialAction() {
   await test('whisper: rejects requests without a valid Twilio signature', async () => {
     const res = await call(whisper, '/api/whisper?i=x', { Digits: '1' }, { sign: false });
     assert.strictEqual(res.statusCode, 403);
+  });
+
+  // ---- multiple customers ----
+  let bought = 0;
+  let released = [];
+  provision.buy = async ({ areaCode, host }) => {
+    bought++;
+    assert.strictEqual(host, HOST);
+    return { number: `+1${areaCode || '919'}5550${100 + bought}`, sid: 'PN' + String(bought).padStart(32, '0') };
+  };
+  provision.release = async (sid) => {
+    released.push(sid);
+  };
+  const adminCall = async (key, body) => {
+    const res = makeRes();
+    await adminApi({ url: '/api/admin', headers: { host: HOST, ...(key ? { 'x-admin-key': key } : {}) }, method: body ? 'POST' : 'GET', body }, res);
+    return res;
+  };
+  const tokenOf = (link) => link.split('key=')[1];
+  let mike; // { id, number, token }
+
+  await test('admin: only your key can add customers', async () => {
+    assert.strictEqual((await adminCall('', null)).statusCode, 403);
+    assert.strictEqual((await adminCall('adminkey12345wrong', { action: 'create', name: 'X', cell: '9195550000' })).statusCode, 403);
+  });
+
+  await test('admin: adding a customer buys a number and returns a private link', async () => {
+    db.clear();
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Mike', cell: '(704) 555-0188', areaCode: '704' })).body);
+    assert.strictEqual(r.created.name, 'Mike');
+    assert.strictEqual(r.created.cell, '+17045550188');
+    assert.match(r.created.number, /^\+1704/);
+    assert.match(r.link, new RegExp('^https://' + HOST + '/\\?key='));
+    assert.strictEqual(r.users.length, 1);
+    assert.ok(!JSON.stringify(r.users).includes('ntfy'), 'list must not expose push topics or tokens');
+    mike = { id: r.created.id, number: r.created.number, token: tokenOf(r.link) };
+    await test('admin: missing name or cell is refused without buying a number', async () => {
+      const before = bought;
+      const bad = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: '', cell: '7045550188' })).body);
+      assert.match(bad.error, /name/i);
+      assert.strictEqual(bought, before);
+    });
+  });
+
+  await test("customer's app: own link works, wrong link does not, and the data is separate from yours", async () => {
+    await call(sms, '/api/sms', { ...OWNER, Body: 'VM ON' }); // owner turns voicemail on
+    const bad = await appCall('not-a-real-key', null);
+    assert.strictEqual(bad.statusCode, 403);
+    let d = JSON.parse((await appCall(mike.token, null)).body);
+    assert.strictEqual(d.voicemail, false, "your setting must not leak to the customer");
+    assert.strictEqual(d.me.number, mike.number);
+    assert.match(d.me.ntfy, /^screener-/);
+    d = JSON.parse((await appCall(mike.token, { action: 'voicemail', on: true })).body);
+    assert.strictEqual(d.voicemail, true);
+    d = JSON.parse((await appCall(mike.token, { action: 'import', numbers: ['9195559001', '9195559002', '9195559003'] })).body);
+    assert.strictEqual(d.contacts, 3);
+    const mine = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.notStrictEqual(mine.contacts, 3);
+    await appCall(mike.token, { action: 'voicemail', on: false });
+    assert.strictEqual(JSON.parse((await appCall('adminkey12345', null)).body).voicemail, true, "customer cannot change yours");
+  });
+
+  await test("calls to a customer's number are greeted for them and ring their cell, not yours", async () => {
+    notices = [];
+    const g = await call(voice, '/api/voice', { From: '+19195557777', To: mike.number });
+    assert.match(g.body, /AI call assistant for Mike/);
+    assert.match(g.body, new RegExp('/api/gather\\?r=0[^"]*&amp;u=' + mike.id));
+    claude.decide = async ({ t }) => {
+      assert.strictEqual(t.id, mike.id, 'screening uses the customer');
+      return { action: 'ring', say: '', summary: 'Neighbor about the fence.', category: 'legit' };
+    };
+    const url = unescape(g.body.match(/action="(\/api\/gather[^"]+)"/)[1]);
+    const r = await call(gather, url, { SpeechResult: 'my fence', From: '+19195557777', To: mike.number });
+    assert.match(r.body, /\+17045550188/);
+    assert.doesNotMatch(r.body, /\+15555550100/);
+    assert.match(r.body, /Number[^>]*url="\/api\/whisper\?i=/);
+    assert.strictEqual(notices.at(-1).topic.startsWith('screener-'), true, 'alerts go to their push topic');
+    assert.strictEqual(notices.at(-1).sms, false, 'never texts from your number');
+  });
+
+  await test("a customer's missed call, decline and voicemail land in their list only", async () => {
+    claude.decide = async () => ({ action: 'ring', say: '', summary: 'Neighbor about the fence.', category: 'legit' });
+    const url = '/api/gather?r=0&u=' + mike.id;
+    const r = await call(gather, url, { SpeechResult: 'fence', From: '+19195557777', To: mike.number });
+    const action = unescape(r.body.match(/<Dial[^>]*action="([^"]+)"/)[1]);
+    assert.match(action, /\?i=/);
+    // voicemail off for Mike: polite goodbye, no recording
+    let res = await call(dialDone, action, { DialCallStatus: 'no-answer', CallSid: 'CAm1' });
+    assert.match(res.body, /Mike isn(&apos;|')t available/);
+    assert.doesNotMatch(res.body, /<Record/);
+    // voicemail on for Mike: records
+    await call(sms, '/api/sms', { From: '+17045550188', To: mike.number, Body: 'vm on' });
+    res = await call(dialDone, action, { DialCallStatus: 'no-answer', CallSid: 'CAm2' });
+    assert.match(res.body, /<Record/);
+    await call(transcription, '/api/transcription?i=' + action.split('i=')[1], {
+      TranscriptionStatus: 'completed', TranscriptionText: 'Your fence is down', RecordingSid: REC,
+    });
+    const mine = JSON.parse((await appCall(mike.token, null)).body);
+    assert.deepStrictEqual(mine.calls.map((c) => c.o), ['voicemail', 'missed']);
+    assert.strictEqual(mine.calls[0].v, 'Your fence is down');
+    const yours = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.ok(!yours.calls.some((c) => /fence/i.test(c.s)), 'your list never shows their calls');
+  });
+
+  await test("texts to a customer's number: only their cell works, and nothing is texted back", async () => {
+    let res = await call(sms, '/api/sms', { From: '+17045550188', To: mike.number, Body: 'VM OFF' });
+    assert.doesNotMatch(res.body, /<Message/);
+    assert.strictEqual(JSON.parse((await appCall(mike.token, null)).body).voicemail, false);
+    res = await call(sms, '/api/sms', { From: OWNER.From, To: mike.number, Body: 'VM ON' });
+    assert.strictEqual(JSON.parse((await appCall(mike.token, null)).body).voicemail, false, "even your phone cannot change a customer's setting by text");
+    res = await call(sms, '/api/sms', { From: '+17045550188', To: mike.number, Body: 'ALLOW 9195551111' });
+    assert.strictEqual(JSON.parse((await appCall(mike.token, null)).body).contacts, 4);
+  });
+
+  await test("a customer's saved contact rings straight through to their cell", async () => {
+    const res = await call(voice, '/api/voice', { From: '+19195559001', To: mike.number });
+    assert.match(res.body, /<Dial/);
+    assert.match(res.body, /\+17045550188/);
+    assert.doesNotMatch(res.body, /<Number[^>]*url=/);
+  });
+
+  await test('your own number still works exactly as before', async () => {
+    const res = await call(voice, '/api/voice', { From: '+19195557777', To: '+19195559999' });
+    assert.match(res.body, /AI call assistant for Rick/);
+    assert.doesNotMatch(res.body, /&amp;u=/);
+  });
+
+  await test('admin: a new login link replaces the old one, and removing a customer releases the number', async () => {
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'newlink', id: mike.id })).body);
+    assert.notStrictEqual(tokenOf(r.link), mike.token);
+    assert.strictEqual((await appCall(tokenOf(r.link), null)).statusCode, 200);
+    assert.strictEqual((await appCall(mike.token, null)).statusCode, 403, 'the old link no longer works');
+    const del = JSON.parse((await adminCall('adminkey12345', { action: 'delete', id: mike.id })).body);
+    assert.strictEqual(del.users.length, 0);
+    assert.deepStrictEqual(released, ['PN' + '1'.padStart(32, '0')]);
+    assert.strictEqual((await appCall(tokenOf(r.link), null)).statusCode, 403, 'a removed customer cannot log in');
+    const after = await call(voice, '/api/voice', { From: '+19195557777', To: mike.number });
+    assert.match(after.body, /AI call assistant for Rick/, 'a removed number no longer routes to the customer');
+  });
+
+  await test('admin: if saving fails after buying a number, the number is released', async () => {
+    released = [];
+    dbDown = true;
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Pat', cell: '9195550101' })).body);
+    dbDown = false;
+    assert.ok(r.error);
+    assert.strictEqual(released.length, 1);
+  });
+
+  // ---- contact names ----
+  await test('contact names: imported names show on calls from those numbers (and removing the contact removes the name)', async () => {
+    db.clear();
+    await appCall('adminkey12345', { action: 'import', entries: [{ n: '(919) 555-1234', name: 'Mike  Smith' }, { n: '9195552222' }, { n: 'junk', name: 'Nobody' }] });
+    claude.decide = async () => ({ action: 'reject', say: '', summary: 'Sales pitch.', category: 'sales' });
+    await call(gather, '/api/gather?r=0', { SpeechResult: 'hello', From: '+19195551234' });
+    await call(gather, '/api/gather?r=0', { SpeechResult: 'hello', From: '+19195552222' });
+    await call(gather, '/api/gather?r=0', { SpeechResult: 'hello', From: '+19195553333' });
+    let d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.strictEqual(d.contacts, 2);
+    const byFrom = Object.fromEntries(d.calls.map((c) => [c.f, c.name]));
+    assert.strictEqual(byFrom['+19195551234'], 'Mike Smith');
+    assert.strictEqual(byFrom['+19195552222'], '');
+    assert.strictEqual(byFrom['+19195553333'], '');
+    d = JSON.parse((await appCall('adminkey12345', { action: 'unallow', number: '9195551234' })).body);
+    assert.strictEqual(d.calls.find((c) => c.f === '+19195551234').name, '');
+  });
+
+  await test('contact names: replacing the list clears old names; plain number imports still work', async () => {
+    await appCall('adminkey12345', { action: 'import', entries: [{ n: '9195551234', name: 'Mike' }] });
+    await appCall('adminkey12345', { action: 'import', numbers: ['9195559999'], replace: true });
+    const d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.strictEqual(d.contacts, 1);
+    assert.ok(d.calls.every((c) => !c.name));
+  });
+
+  await test("contact names: a customer's names are separate from yours", async () => {
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Lee', cell: '9195550177' })).body);
+    const tok = r.link.split('key=')[1];
+    await appCall(tok, { action: 'import', entries: [{ n: '9195551234', name: 'Lee Friend' }] });
+    claude.decide = async () => ({ action: 'reject', say: '', summary: 'Sales.', category: 'sales' });
+    await call(gather, '/api/gather?r=0&u=' + r.created.id, { SpeechResult: 'hi', From: '+19195551234' });
+    const theirs = JSON.parse((await appCall(tok, null)).body);
+    assert.strictEqual(theirs.calls[0].name, 'Lee Friend');
+    const mine = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.ok(mine.calls.every((c) => c.name !== 'Lee Friend'));
+  });
+
+  // ---- contact list screen and last-synced ----
+  await test('contacts screen: list is sorted by name, names first; last-synced is recorded on import', async () => {
+    db.clear();
+    let d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.strictEqual(d.synced, 0, 'never synced yet');
+    await appCall('adminkey12345', { action: 'import', entries: [{ n: '9195550003' }, { n: '9195550002', name: 'Zed' }, { n: '9195550001', name: 'Amy' }, { n: '9195550000' }] });
+    d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.ok(Date.now() - d.synced < 5000, 'synced time is set');
+    const list = JSON.parse((await appCall('adminkey12345', { action: 'contacts' })).body).contactList;
+    assert.deepStrictEqual(list.map((c) => c.name || c.n), ['Amy', 'Zed', '9195550000', '9195550003']);
+  });
+
+  await test('contacts screen: customers only see their own list, and need their own key', async () => {
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Kay', cell: '9195550166' })).body);
+    const tok = r.link.split('key=')[1];
+    await appCall(tok, { action: 'import', entries: [{ n: '9195557001', name: 'Kay Friend' }] });
+    const theirs = JSON.parse((await appCall(tok, { action: 'contacts' })).body).contactList;
+    assert.deepStrictEqual(theirs.map((c) => c.name), ['Kay Friend']);
+    assert.strictEqual((await appCall('bad-key', { action: 'contacts' })).statusCode, 403);
+    const mine = JSON.parse((await appCall('adminkey12345', { action: 'contacts' })).body).contactList;
+    assert.ok(!mine.some((c) => c.name === 'Kay Friend'));
   });
 
   console.log(failures ? `\n${failures} voicemail test(s) FAILED` : '\nAll voicemail tests passed');
