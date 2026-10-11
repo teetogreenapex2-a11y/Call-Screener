@@ -6,6 +6,7 @@ const claude = require('../lib/claude');
 const notify = require('../lib/notify');
 const calls = require('../lib/calls');
 const tenant = require('../lib/tenant');
+const ring = require('../lib/ring');
 const { VoiceResponse, decode, encodeInfo, sayTo, buildGather, reply, forbidden } = require('../lib/twiml');
 
 module.exports = async function handler(req, res) {
@@ -58,10 +59,8 @@ module.exports = async function handler(req, res) {
       sayTo(vr, c, 'Thank you. Please hold while I connect you.');
       // If you don't pick up, /api/dial-done takes over (voicemail or a goodbye, depending on your setting).
       const info = encodeInfo({ s: d.summary, c: d.category, f: from, u: t.id });
-      // When you answer you hear who it is and press 1 to accept (see /api/whisper).
-      const dial = vr.dial({ timeout: c.ringSeconds, answerOnBridge: true, action: `/api/dial-done?i=${info}`, method: 'POST' });
-      if (c.whisper) dial.number({ url: `/api/whisper?i=${info}`, method: 'POST' }, c.ownerPhone);
-      else dial.number(c.ownerPhone);
+      // Rings your phone and/or the app (see lib/ring.js). On the phone leg you hear who it is and press 1.
+      await ring.dialOwner(vr, { t, c, info, summary: d.summary, category: d.category, from, whisper: true });
     }
     await notify.send({ title: 'Call coming through', body: `Ringing you [${d.category}]: ${d.summary} (${from})`, ...tenant.notifyOpts(t) });
     return reply(res, vr);

@@ -65,6 +65,14 @@ audio{width:100%;margin-top:8px}
       <label class="switch"><input type="checkbox" id="vm"><span></span></label>
     </div>
 
+    <h2>Where calls ring</h2>
+    <div class="card">
+      <div class="chips" id="ringchips" style="margin-bottom:6px">
+        <button class="chip" data-r="phone">Phone number</button><button class="chip" data-r="app">Android app</button><button class="chip" data-r="both">Both</button>
+      </div>
+      <div class="sub" id="ringsub"></div>
+    </div>
+
     <h2>Setup</h2>
     <div class="card" id="setup" hidden>
       <div>Your screening number: <b id="mynum"></b></div>
@@ -80,6 +88,7 @@ audio{width:100%;margin-top:8px}
       <div><b id="cn">0</b> numbers ring your phone directly, with no screening.</div>
       <div class="sub" id="synced"></div>
       <button id="pick" hidden>Import from phone contacts</button>
+      <button id="nsync" hidden>Sync contacts now</button>
       <button class="alt" id="filebtn">Load .vcf / .csv file</button>
       <input type="file" id="file" accept=".vcf,.csv,.txt" hidden>
       <div style="margin-top:10px"><input type="tel" id="num" placeholder="Add one number, e.g. 919 555 1234"></div>
@@ -142,10 +151,12 @@ audio{width:100%;margin-top:8px}
   function render(d) {
     if (d.forbidden) { show('login'); $('lmsg').textContent = 'That key was not accepted.'; return; }
     if (d.error) { $('status').textContent = d.error; return; }
-    show('app');
+    show('app'); tellApp();
     $('vm').checked = d.voicemail;
     $('vmsub').textContent = d.voicemail ? 'Callers you miss can leave a message.' : 'Callers you miss hear a polite goodbye.';
     $('cn').textContent = d.contacts;
+    document.querySelectorAll('#ringchips .chip').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-r') === d.ring); });
+    $('ringsub').textContent = d.ring === 'app' ? 'Approved calls ring the Android app only. Needs data or Wi-Fi.' : d.ring === 'both' ? 'Approved calls ring your phone number and the app. Do not use this if you forward all calls to the screener.' : 'Approved calls ring your phone number.';
     var sy = $('synced');
     if (!d.synced) { sy.textContent = 'Never loaded from your phone. Tap Import to add your contacts.'; sy.className = 'sub warn'; }
     else {
@@ -217,15 +228,22 @@ audio{width:100%;margin-top:8px}
   };
   $('csearch').oninput = drawContacts;
 
-  document.querySelectorAll('.chip').forEach(function (b) {
+  document.querySelectorAll('#ringchips .chip').forEach(function (b) {
+    b.onclick = function () { act({ action: 'ringmode', mode: b.getAttribute('data-r') }, 'Saved.'); };
+  });
+
+  document.querySelectorAll('.chips:not(#ringchips) .chip').forEach(function (b) {
     b.onclick = function () {
       FILTER = b.getAttribute('data-f');
-      document.querySelectorAll('.chip').forEach(function (x) { x.classList.toggle('on', x === b); });
+      document.querySelectorAll('.chips:not(#ringchips) .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
       drawCalls();
     };
   });
 
   function show(which) { $('login').hidden = which !== 'login'; $('app').hidden = which !== 'app'; }
+  // Inside the Android app: hand it the key (so it can ring and sync contacts) and let it refresh this page.
+  window.refreshApp = function () { load(); };
+  function tellApp() { try { if (window.AndroidBridge && AndroidBridge.setKey) AndroidBridge.setKey(KEY); } catch (e) {} }
   function load() { return api().then(render).catch(function () { $('status').textContent = 'Offline. Try again.'; }); }
 
   function act(body, okMsg) {
@@ -275,7 +293,10 @@ audio{width:100%;margin-top:8px}
     };
     rd.readAsText(f);
   };
-  if (navigator.contacts && navigator.contacts.select) {
+  if (window.AndroidBridge && AndroidBridge.syncContacts) {
+    $('nsync').hidden = false;
+    $('nsync').onclick = function () { say('Syncing...'); AndroidBridge.syncContacts(); };
+  } else if (navigator.contacts && navigator.contacts.select) {
     $('pick').hidden = false;
     $('pick').onclick = function () {
       navigator.contacts.select(['name', 'tel'], { multiple: true }).then(function (list) {

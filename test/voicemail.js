@@ -24,6 +24,7 @@ const contactsApi = require('../api/contacts');
 const appApi = require('../api/app');
 const whisper = require('../api/whisper');
 const adminApi = require('../api/admin');
+const voiceToken = require('../api/voice-token');
 const provision = require('../lib/provision');
 const claude = require('../lib/claude');
 const notify = require('../lib/notify');
@@ -707,6 +708,97 @@ async function ringAndGetDialAction() {
     assert.strictEqual((await appCall('bad-key', { action: 'contacts' })).statusCode, 403);
     const mine = JSON.parse((await appCall('adminkey12345', { action: 'contacts' })).body).contactList;
     assert.ok(!mine.some((c) => c.name === 'Kay Friend'));
+  });
+
+  // ---- ringing the Android app ----
+  const tokenCall = async (key) => {
+    const res = makeRes();
+    await voiceToken({ url: '/api/voice-token', headers: key ? { 'x-admin-key': key } : {}, method: 'GET' }, res);
+    return res;
+  };
+  const ringXml = async (from, u) => {
+    claude.decide = async () => ({ action: 'ring', say: '', summary: 'Neighbor about the fence.', category: 'legit' });
+    return (await call(gather, '/api/gather?r=0' + (u ? '&u=' + u : ''), { SpeechResult: 'fence', From: from })).body;
+  };
+
+  await test('app calling: ring mode defaults to the phone number; app and both modes add the app as a target', async () => {
+    db.clear();
+    let x = await ringXml('+19195551234');
+    assert.match(x, /<Number/);
+    assert.doesNotMatch(x, /<Client/);
+    await appCall('adminkey12345', { action: 'ringmode', mode: 'app' });
+    x = await ringXml('+19195551234');
+    assert.doesNotMatch(x, /<Number/);
+    assert.match(x, /<Client><Identity>owner<\/Identity>/);
+    assert.match(x, /<Parameter name="summary" value="Neighbor about the fence\."/);
+    assert.match(x, /<Parameter name="from" value="\+19195551234"/);
+    await appCall('adminkey12345', { action: 'ringmode', mode: 'both' });
+    x = await ringXml('+19195551234');
+    assert.match(x, /<Number/);
+    assert.match(x, /<Client>/);
+    assert.match(x, /action="\/api\/dial-done\?i=/);
+    const bad = await appCall('adminkey12345', { action: 'ringmode', mode: 'nonsense' });
+    assert.strictEqual(bad.statusCode, 400);
+  });
+
+  await test("app calling: the caller's saved name is passed to the app's call screen", async () => {
+    await appCall('adminkey12345', { action: 'import', entries: [{ n: '9195551234', name: 'Mike Smith' }] });
+    const x = await ringXml('+19195551234');
+    assert.match(x, /<Parameter name="name" value="Mike Smith"/);
+  });
+
+  await test('app calling: saved contacts ring the app too, with no whisper', async () => {
+    const res = await call(voice, '/api/voice', { From: '+19195551234' });
+    assert.match(res.body, /<Client>/);
+    assert.doesNotMatch(res.body, /whisper/);
+  });
+
+  await test("app calling: a customer's app is addressed by their own name and never yours", async () => {
+    const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Jo', cell: '9195550155' })).body);
+    await appCall(r.link.split('key=')[1], { action: 'ringmode', mode: 'app' });
+    const x = await ringXml('+19195557000', r.created.id);
+    assert.match(x, new RegExp('<Identity>u' + r.created.id + '</Identity>'));
+    assert.doesNotMatch(x, /<Identity>owner/);
+  });
+
+  await test('app calling: a declined or unreachable app falls into the normal voicemail path', async () => {
+    db.clear();
+    await appCall('adminkey12345', { action: 'ringmode', mode: 'app' });
+    const x = await ringXml('+19195551234');
+    const action = unescape(x.match(/<Dial[^>]*action="([^"]+)"/)[1]);
+    const res = await call(dialDone, action, { DialCallStatus: 'busy', CallSid: 'CAapp1' });
+    assert.match(res.body, /isn(&apos;|')t available right now/);
+  });
+
+  await test('voice token: refuses without a key, explains missing server setup, then issues a token', async () => {
+    assert.strictEqual((await tokenCall('')).statusCode, 403);
+    assert.strictEqual((await tokenCall('nope')).statusCode, 403);
+    for (const k of ['TWILIO_API_KEY_SID', 'TWILIO_API_KEY_SECRET', 'TWILIO_PUSH_CREDENTIAL_SID']) delete process.env[k];
+    let r = JSON.parse((await tokenCall('adminkey12345')).body);
+    assert.match(r.error, /TWILIO_API_KEY_SID/);
+    process.env.TWILIO_API_KEY_SID = 'SK' + 'a'.repeat(32);
+    process.env.TWILIO_API_KEY_SECRET = 'secret';
+    process.env.TWILIO_PUSH_CREDENTIAL_SID = 'CR' + 'b'.repeat(32);
+    db.clear();
+    r = JSON.parse((await tokenCall('adminkey12345')).body);
+    assert.strictEqual(r.identity, 'owner');
+    const claims = JSON.parse(Buffer.from(r.token.split('.')[1], 'base64url').toString());
+    assert.strictEqual(claims.grants.identity, 'owner');
+    assert.strictEqual(claims.grants.voice.incoming.allow, true);
+    assert.strictEqual(claims.grants.voice.push_credential_sid, 'CR' + 'b'.repeat(32));
+    assert.strictEqual(r.mode, 'app', 'first registration switches ringing to the app');
+  });
+
+  await test('voice token: registering again never overrides the ring mode you chose', async () => {
+    await appCall('adminkey12345', { action: 'ringmode', mode: 'both' });
+    const r = JSON.parse((await tokenCall('adminkey12345')).body);
+    assert.strictEqual(r.mode, 'both');
+  });
+
+  await test("voice token: a customer gets a token for their own identity only", async () => {
+    const c = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Al', cell: '9195550144' })).body);
+    const r = JSON.parse((await tokenCall(c.link.split('key=')[1])).body);
+    assert.strictEqual(r.identity, 'u' + c.created.id);
   });
 
   console.log(failures ? `\n${failures} voicemail test(s) FAILED` : '\nAll voicemail tests passed');
