@@ -119,7 +119,7 @@ notify.send = async (n) => {
     assert.deepStrictEqual(hist.map((h) => h.who), ['assistant', 'caller', 'assistant']);
 
     res = await call(gather, path, { SpeechResult: 'The launch monitor I ordered Tuesday', From: '+13035550123' });
-    assert.match(res.body, /<Dial[^>]*>\+15555550100<\/Dial>/);
+    assert.match(res.body, /<Dial[^>]*><Number[^>]*>\+15555550100<\/Number><\/Dial>/);
     assert.match(res.body, /answerOnBridge="true"/);
     assert.strictEqual(seen[1].history.length, 4);
     assert.strictEqual(notices.length, 1);

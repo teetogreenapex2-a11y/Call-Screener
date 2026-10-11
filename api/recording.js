@@ -3,6 +3,7 @@
 // /api/transcription (with the words in it). Everything else is handled here.
 const { isValid } = require('../lib/twilio-verify');
 const notify = require('../lib/notify');
+const calls = require('../lib/calls');
 const { listenUrl } = require('../lib/links');
 const { decodeInfo, forbidden } = require('../lib/twiml');
 
@@ -19,8 +20,10 @@ module.exports = async function handler(req, res) {
   if (status === 'failed') {
     await notify.send({ title: 'Voicemail failed', body: `A voicemail could not be saved. ${who}` });
   } else if (seconds <= 1) {
+    await calls.log({ f: info.f, c: info.c, s: info.s, o: 'missed' });
     await notify.send({ title: 'Missed call', body: `Caller left no message. ${who}` });
   } else if (seconds === 2) {
+    await calls.log({ f: info.f, c: info.c, s: info.s, o: 'voicemail', v: '(very short message)', l: link });
     await notify.send({ title: 'New voicemail', body: `Very short voicemail (${seconds}s). ${who}${link ? ` Listen: ${link}` : ''}` });
   }
   // Longer messages are announced by /api/transcription.

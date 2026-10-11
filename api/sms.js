@@ -6,6 +6,7 @@ const { cfg } = require('../lib/config');
 const notify = require('../lib/notify');
 const settings = require('../lib/settings');
 const store = require('../lib/store');
+const contacts = require('../lib/contacts');
 const { forbidden } = require('../lib/twiml');
 
 const last10 = (s) => String(s || '').replace(/\D/g, '').slice(-10);
@@ -29,10 +30,27 @@ module.exports = async function handler(req, res) {
 
   const text = String(b.Body || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const m = text.match(/^(?:vm|voicemail)(?: (on|off|status))?$/);
+  const al = String(b.Body || '').trim().match(/^(allow|unallow)\s+(.+)$/i);
   let message;
 
-  if (!m) {
-    message = 'Text VM ON or VM OFF to switch voicemail, or VM to check it.';
+  if (al) {
+    const n = contacts.norm(al[2]);
+    if (!n) {
+      message = 'Send ALLOW or UNALLOW followed by a 10-digit number.';
+    } else if (!store.configured()) {
+      message = "I can't save that yet: the settings database isn't connected in Vercel.";
+    } else {
+      try {
+        const adding = al[1].toLowerCase() === 'allow';
+        const total = adding ? await contacts.add([n]) : await contacts.remove(n);
+        message = `${adding ? 'Added' : 'Removed'} ${n}. ${total} numbers on the ring-through list.`;
+      } catch (err) {
+        console.error('could not save contact:', err && err.message);
+        message = "Couldn't save that. Try again in a minute.";
+      }
+    }
+  } else if (!m) {
+    message = 'Text VM ON or VM OFF to switch voicemail, or VM to check it. ALLOW 9195551234 adds a contact.';
   } else if (m[1] === 'on' || m[1] === 'off') {
     if (!store.configured()) {
       message = "I can't save that yet: the settings database isn't connected in Vercel.";

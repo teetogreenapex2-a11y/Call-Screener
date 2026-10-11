@@ -19,6 +19,10 @@ const recording = require('../api/recording');
 const transcription = require('../api/transcription');
 const listen = require('../api/listen');
 const sms = require('../api/sms');
+const voice = require('../api/voice');
+const contactsApi = require('../api/contacts');
+const appApi = require('../api/app');
+const whisper = require('../api/whisper');
 const claude = require('../lib/claude');
 const notify = require('../lib/notify');
 
@@ -127,7 +131,7 @@ async function ringAndGetDialAction() {
     const action = await ringAndGetDialAction();
     notices = [];
     const res = await call(dialDone, action, { DialCallStatus: 'no-answer', From: '+13035550123' });
-    assert.match(res.body, /can(&apos;|')t take your call/);
+    assert.match(res.body, /isn(&apos;|')t available right now/);
     assert.match(res.body, /<Hangup/);
     assert.doesNotMatch(res.body, /<Record/);
     assert.strictEqual(notices[0].title, 'Missed call');
@@ -326,6 +330,169 @@ async function ringAndGetDialAction() {
       const res = await call(handler, path, { From: OWNER.From, Body: 'VM ON' }, { sign: false });
       assert.strictEqual(res.statusCode, 403, path);
     }
+  });
+
+  // ---- ring-through contacts ----
+  process.env.ADMIN_KEY = 'adminkey12345';
+  const getPage = async (key) => {
+    const res = makeRes();
+    await contactsApi({ url: '/api/contacts?key=' + key, headers: {}, method: 'GET' }, res);
+    return res;
+  };
+  const postList = async (key, body) => {
+    const res = makeRes();
+    await contactsApi({ url: '/api/contacts?key=' + key, headers: {}, method: 'POST', body }, res);
+    return res;
+  };
+
+  await test('contacts page: wrong or missing key is refused', async () => {
+    assert.strictEqual((await getPage('nope')).statusCode, 403);
+    assert.strictEqual((await getPage('')).statusCode, 403);
+  });
+
+  await test('contacts page: saves numbers (merging by default, replace on request)', async () => {
+    db.clear();
+    let res = await postList('adminkey12345', { numbers: ['(919) 555-0001', '+1 919 555 0002', 'junk'] });
+    assert.strictEqual(JSON.parse(res.body).count, 2);
+    res = await postList('adminkey12345', { numbers: ['9195550003', '9195550001'] });
+    assert.strictEqual(JSON.parse(res.body).count, 3);
+    res = await postList('adminkey12345', { numbers: ['9195550009'], replace: true });
+    assert.strictEqual(JSON.parse(res.body).count, 1);
+    assert.match((await getPage('adminkey12345')).body, /<b id="n">1<\/b>/);
+  });
+
+  await test('voice: a saved contact rings straight through, others are screened', async () => {
+    db.clear();
+    await postList('adminkey12345', { numbers: ['9195550001'] });
+    notices = [];
+    let res = await call(voice, '/api/voice', { From: '+19195550001' });
+    assert.match(res.body, /<Dial/);
+    assert.match(res.body, /\+15555550100/);
+    assert.doesNotMatch(res.body, /<Gather/);
+    assert.match(notices[0].body, /contact/);
+    res = await call(voice, '/api/voice', { From: '+19195557777' });
+    assert.match(res.body, /<Gather/);
+    assert.doesNotMatch(res.body, /<Dial/);
+  });
+
+  await test('voice: a contact number that failed caller-ID verification is still screened', async () => {
+    const res = await call(voice, "/api/voice", { From: "+19195550001", StirVerstat: 'TN-Validation-Failed-A' });
+    assert.match(res.body, /<Gather/);
+  });
+
+  await test('voice: if the database is down, the call is screened as usual', async () => {
+    dbDown = true;
+    const res = await call(voice, '/api/voice', { From: '+19195550001' });
+    dbDown = false;
+    assert.match(res.body, /<Gather/);
+  });
+
+  await test('sms: ALLOW and UNALLOW edit the list; strangers cannot', async () => {
+    db.clear();
+    let res = await call(sms, '/api/sms', { ...OWNER, Body: 'ALLOW 919-555-1234' });
+    assert.match(res.body, /Added 9195551234\. 1 numbers/);
+    assert.strictEqual((await call(voice, '/api/voice', { From: '+19195551234' })).body.includes('<Dial'), true);
+    res = await call(sms, '/api/sms', { ...OWNER, Body: 'unallow 9195551234' });
+    assert.match(res.body, /Removed 9195551234\. 0 numbers/);
+    assert.strictEqual((await call(voice, '/api/voice', { From: '+19195551234' })).body.includes('<Dial'), false);
+    res = await call(sms, '/api/sms', { From: '+19195559999', Body: 'ALLOW 9195551234' });
+    assert.doesNotMatch(res.body, /Added/);
+    assert.strictEqual((await call(voice, '/api/voice', { From: '+19195551234' })).body.includes('<Dial'), false);
+  });
+
+  // ---- phone app ----
+  const appCall = async (key, body) => {
+    const res = makeRes();
+    await appApi({ url: '/api/app', headers: key ? { 'x-admin-key': key } : {}, method: body ? 'POST' : 'GET', body }, res);
+    return res;
+  };
+
+  await test('app: refuses requests without the right key', async () => {
+    assert.strictEqual((await appCall('', null)).statusCode, 403);
+    assert.strictEqual((await appCall('wrong', null)).statusCode, 403);
+  });
+
+  await test('app: voicemail switch and contacts work from the app', async () => {
+    db.clear();
+    let d = JSON.parse((await appCall('adminkey12345', { action: 'voicemail', on: true })).body);
+    assert.strictEqual(d.voicemail, true);
+    d = JSON.parse((await appCall('adminkey12345', { action: 'import', numbers: ['9195550001', '9195550002'] })).body);
+    assert.strictEqual(d.contacts, 2);
+    d = JSON.parse((await appCall('adminkey12345', { action: 'unallow', number: '(919) 555-0001' })).body);
+    assert.strictEqual(d.contacts, 1);
+    d = JSON.parse((await appCall('adminkey12345', { action: 'voicemail', on: false })).body);
+    assert.strictEqual(d.voicemail, false);
+  });
+
+  await test('app: call list records blocked calls, missed calls and voicemails', async () => {
+    db.clear();
+    claude.decide = async () => ({ action: 'reject', say: '', summary: 'Solar panel sales.', category: 'sales' });
+    await call(gather, '/api/gather?r=0', { SpeechResult: 'solar panels', From: '+13035550111' });
+    const action = await ringAndGetDialAction();
+    await call(dialDone, action, { DialCallStatus: 'no-answer', From: '+13035550123' });
+    await call(dialDone, action, { DialCallStatus: 'completed', From: '+13035550123' });
+    await call(transcription, '/api/transcription?i=' + action.split('i=')[1], {
+      TranscriptionStatus: 'completed', TranscriptionText: 'Call me back', RecordingSid: REC,
+    });
+    const d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.deepStrictEqual(d.calls.map((c) => c.o), ['voicemail', 'answered', 'missed', 'blocked']);
+    assert.strictEqual(d.calls[0].v, 'Call me back');
+    assert.match(d.calls[0].l, /^https:\/\/.*\/api\/listen\?r=RE/);
+    assert.match(d.calls[3].s, /Solar/);
+  });
+
+  await test('app: a broken database never breaks a call', async () => {
+    dbDown = true;
+    claude.decide = async () => ({ action: 'reject', say: '', summary: 'Spam.', category: 'scam' });
+    const res = await call(gather, '/api/gather?r=0', { SpeechResult: 'hi', From: '+13035550111' });
+    dbDown = false;
+    assert.match(res.body, /<Hangup/);
+  });
+
+  // ---- whisper (hear who is calling, press 1) ----
+  await test('whisper: you hear who is calling and can press 1 or 2', async () => {
+    const action = await ringAndGetDialAction();
+    const i = action.split('i=')[1];
+    const dialXml = (await call(gather, '/api/gather?r=0', { SpeechResult: 'Mike', From: '+13035550123' })).body;
+    assert.match(dialXml, /<Number[^>]*url="\/api\/whisper\?i=/);
+    const res = await call(whisper, '/api/whisper?i=' + i, { CallSid: 'CAchild', ParentCallSid: 'CAparent' });
+    assert.match(res.body, /<Gather[^>]*numDigits="1"/);
+    assert.match(res.body, /Mike about his order/);
+    assert.match(res.body, /Press 1 to accept/);
+    assert.match(res.body, /\/api\/whisper\?i=[^"]*&amp;no=1/, 'no input falls through to decline');
+  });
+
+  await test('whisper: pressing 1 connects the caller (empty response)', async () => {
+    const res = await call(whisper, '/api/whisper?i=x', { Digits: '1', ParentCallSid: 'CAp1' });
+    assert.doesNotMatch(res.body, /<Hangup|<Gather|<Say/);
+  });
+
+  await test('whisper: pressing 2 declines; the caller gets the voicemail path, not a hangup', async () => {
+    db.clear();
+    const action = await ringAndGetDialAction();
+    const i = action.split('i=')[1];
+    let res = await call(whisper, '/api/whisper?i=' + i, { Digits: '2', ParentCallSid: 'CAp2', CallSid: 'CAc2' });
+    assert.match(res.body, /<Hangup/);
+    // voicemail off: polite message
+    res = await call(dialDone, action, { DialCallStatus: 'completed', CallSid: 'CAp2' });
+    assert.match(res.body, /isn(&apos;|')t available right now/);
+    assert.doesNotMatch(res.body, /<Record/);
+    // voicemail on: offered a message
+    await call(sms, '/api/sms', { ...OWNER, Body: 'VM ON' });
+    await call(whisper, '/api/whisper?i=' + i + '&no=1', { ParentCallSid: 'CAp3' });
+    res = await call(dialDone, action, { DialCallStatus: 'completed', CallSid: 'CAp3' });
+    assert.match(res.body, /<Record/);
+  });
+
+  await test('whisper: a normal answered call (not declined) just ends', async () => {
+    const action = await ringAndGetDialAction();
+    const res = await call(dialDone, action, { DialCallStatus: 'completed', CallSid: 'CAnever' });
+    assert.doesNotMatch(res.body, /<Record|isn(&apos;|')t available/);
+  });
+
+  await test('whisper: rejects requests without a valid Twilio signature', async () => {
+    const res = await call(whisper, '/api/whisper?i=x', { Digits: '1' }, { sign: false });
+    assert.strictEqual(res.statusCode, 403);
   });
 
   console.log(failures ? `\n${failures} voicemail test(s) FAILED` : '\nAll voicemail tests passed');

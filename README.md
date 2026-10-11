@@ -15,10 +15,13 @@ You    -> text "VM ON" / "VM OFF" to the Twilio number -> /api/sms
 
 - `api/voice.js` - first webhook; greets and listens
 - `api/gather.js` - runs after each thing the caller says; Claude decides; rings you or hangs up
+- `api/whisper.js` - plays to you when you answer: who is calling, press 1 to accept or 2 to decline
 - `api/dial-done.js` - runs when ringing your phone ends; takes a voicemail if it is switched on
 - `api/recording.js`, `api/transcription.js` - voicemail notifications (transcript + link)
 - `api/listen.js` - plays a voicemail from the signed link in the notification
-- `api/sms.js` - the text-message switch (only your own phone can use it)
+- `api/sms.js` - the text-message switch (only your own phone can use it); also `ALLOW 9195551234` / `UNALLOW 9195551234`
+- `api/contacts.js` - page to load your contacts into the ring-through list (needs `ADMIN_KEY`)
+- `lib/contacts.js` - the ring-through list, kept in the database
 - `lib/claude.js` - the screening prompt and the decision logic (edit the rules here)
 - `lib/config.js` - greeting text and defaults
 - `lib/store.js`, `lib/settings.js` - the on/off setting, kept in the Upstash Redis database
@@ -45,3 +48,15 @@ You    -> text "VM ON" / "VM OFF" to the Twilio number -> /api/sms
 - Text replies from a new US Twilio number can be filtered until carrier registration is done. Set `NTFY_TOPIC` (free ntfy app) to get push notifications and setting confirmations immediately.
 - Twilio's built-in speech recognition bills per 15 seconds of listening, so most of the per-call cost is there.
 - Recording laws vary by state. The voicemail greeting tells callers the message is recorded and transcribed.
+
+## Ring-through contacts
+
+Callers on the list ring your phone directly, with no AI screening. Set `ADMIN_KEY` in Vercel (12+ random characters), then open `https://YOUR-PROJECT.vercel.app/api/contacts?key=YOUR_ADMIN_KEY` and load a contacts file (.vcf or .csv) or paste numbers. Text `ALLOW 9195551234` to add one later. Calls whose caller ID failed carrier verification are screened anyway.
+
+## Phone app
+
+Open `https://YOUR-PROJECT.vercel.app/?key=YOUR_ADMIN_KEY` once in Chrome on your phone, then menu > Install app (or Add to Home screen). It shows recent calls (with voicemail transcripts and playback), the voicemail switch, and the ring-through list. On Android, "Import from phone contacts" reads your contacts directly.
+
+## Whisper and declining
+
+When the AI puts a call through and you answer, you hear who it is and press 1 to connect or 2 (or nothing) to decline. A declined caller hears that you aren't available and, if voicemail is on, can leave a message. Set `WHISPER=off` to skip the whisper. Saved contacts ring straight through with no whisper.
