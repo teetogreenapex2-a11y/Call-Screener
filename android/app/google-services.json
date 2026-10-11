@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "748505012241",
+    "project_id": "tee-to-green-golf",
+    "storage_bucket": "tee-to-green-golf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:748505012241:android:7e0bcb171c39346794f9b0",
+        "android_client_info": {
+          "package_name": "com.bookmypro.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "748505012241-fnabltdiqoll8v2aimd8kvkh51rmf9on.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bookmypro.app",
+            "certificate_hash": "f618cb1de20110a3575e3e7d8d1958ab36f419bc"
+          }
+        },
+        {
+          "client_id": "748505012241-cpofgjbeuvqnvimf0fbd06muaeobv4fr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRDAbnTCmZK7eXuuPQkelGGVJJa896noY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "748505012241-cpofgjbeuvqnvimf0fbd06muaeobv4fr.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "748505012241-0ri4odsjmdmbcv9usac2ka67pgbqf9ao.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bookmypro.app"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:748505012241:android:4e671b495584240f94f9b0",
+        "android_client_info": {
+          "package_name": "com.teetogreengolf.callscreener"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "748505012241-cpofgjbeuvqnvimf0fbd06muaeobv4fr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRDAbnTCmZK7eXuuPQkelGGVJJa896noY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "748505012241-cpofgjbeuvqnvimf0fbd06muaeobv4fr.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "748505012241-0ri4odsjmdmbcv9usac2ka67pgbqf9ao.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bookmypro.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
