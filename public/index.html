@@ -71,6 +71,7 @@ audio{width:100%;margin-top:8px}
         <button class="chip" data-r="phone">Phone number</button><button class="chip" data-r="app">Android app</button><button class="chip" data-r="both">Both</button>
       </div>
       <div class="sub" id="ringsub"></div>
+      <div class="sub" id="appstatus" style="margin-top:8px;display:none"></div>
     </div>
 
     <h2>Setup</h2>
@@ -243,6 +244,8 @@ audio{width:100%;margin-top:8px}
   function show(which) { $('login').hidden = which !== 'login'; $('app').hidden = which !== 'app'; }
   // Inside the Android app: hand it the key (so it can ring and sync contacts) and let it refresh this page.
   window.refreshApp = function () { load(); };
+  function showAppStatus() { try { if (window.AndroidBridge && AndroidBridge.status) { var e = $('appstatus'); e.style.display = 'block'; e.textContent = 'This phone: ' + AndroidBridge.status(); } } catch (x) {} }
+  setInterval(showAppStatus, 2000);
   function tellApp() { try { if (window.AndroidBridge && AndroidBridge.setKey) AndroidBridge.setKey(KEY); } catch (e) {} }
   function load() { return api().then(render).catch(function () { $('status').textContent = 'Offline. Try again.'; }); }
 
