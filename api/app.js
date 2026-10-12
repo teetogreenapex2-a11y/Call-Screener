@@ -5,6 +5,7 @@ const contacts = require('../lib/contacts');
 const calls = require('../lib/calls');
 const store = require('../lib/store');
 const tenant = require('../lib/tenant');
+const usage = require('../lib/usage');
 
 function json(res, status, obj) {
   res.statusCode = status;
@@ -26,7 +27,7 @@ async function snapshot(t) {
   const me = t.owner
     ? { name: t.name, number: process.env.TWILIO_PHONE_NUMBER || '', ntfy: t.ntfy }
     : { name: t.name, number: t.number, ntfy: t.ntfy };
-  return { voicemail, calls: list, contacts: count, synced, me, ring: await settings.ringMode(t) };
+  return { voicemail, calls: list, contacts: count, synced, me, ring: await settings.ringMode(t), ringSeconds: await settings.ringSeconds(t), usage: await usage.current(t) };
 }
 
 module.exports = async function handler(req, res) {
@@ -42,12 +43,16 @@ module.exports = async function handler(req, res) {
       else if (b.action === 'ringmode') {
         if (!settings.MODES.includes(b.mode)) return json(res, 400, { error: 'unknown ring mode' });
         await settings.setRingMode(b.mode, t);
+      } else if (b.action === 'ringseconds') {
+        const n = Number(b.seconds);
+        if (!(n >= 8 && n <= 60)) return json(res, 400, { error: 'ring time must be 8 to 60 seconds' });
+        await settings.setRingSeconds(n, t);
       } else if (b.action === 'allow') await contacts.add([b.number], ns);
       else if (b.action === 'unallow') await contacts.remove(b.number, ns);
       else if (b.action === 'import') {
         // entries: [{ n, name }] from the phone's contacts; numbers: plain list.
         const entries = Array.isArray(b.entries) ? b.entries.slice(0, 20000) : (Array.isArray(b.numbers) ? b.numbers.slice(0, 20000) : []).map((n) => ({ n }));
-        await contacts.importEntries(entries, ns, Boolean(b.replace));
+        await contacts.importEntries(entries, ns, Boolean(b.replace), Boolean(b.skipRemoved));
       } else if (b.action === 'contacts') return json(res, 200, { contactList: await contacts.listAll(ns) });
       else if (b.action === 'clear-calls') await store.set(calls.keyFor(ns), '[]');
       else if (b.action !== 'refresh') return json(res, 400, { error: 'unknown action' });

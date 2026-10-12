@@ -801,6 +801,79 @@ async function ringAndGetDialAction() {
     assert.strictEqual(r.identity, 'u' + c.created.id);
   });
 
+  await test('removed contacts stay removed when the phone syncs again, and come back when added by hand', async () => {
+    db.clear();
+    await appCall('adminkey12345', { action: 'import', entries: [{ n: '9195550001', name: 'Ann' }, { n: '9195550002', name: 'Bob' }] });
+    await appCall('adminkey12345', { action: 'unallow', number: '9195550001' });
+    let d = JSON.parse((await appCall('adminkey12345', { action: 'import', skipRemoved: true, entries: [{ n: '9195550001', name: 'Ann' }, { n: '9195550002', name: 'Bob' }, { n: '9195550003', name: 'Cy' }] })).body);
+    assert.strictEqual(d.contacts, 2, 'Ann stays out, Cy is added');
+    d = JSON.parse((await appCall('adminkey12345', { action: 'allow', number: '9195550001' })).body);
+    assert.strictEqual(d.contacts, 3);
+    d = JSON.parse((await appCall('adminkey12345', { action: 'import', skipRemoved: true, entries: [{ n: '9195550001' }] })).body);
+    assert.strictEqual(d.contacts, 3, 'adding by hand clears the removed mark');
+  });
+
+  await test('ring time: default, change, limits, and it is used when ringing', async () => {
+    db.clear();
+    let d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.strictEqual(d.ringSeconds, 18);
+    d = JSON.parse((await appCall('adminkey12345', { action: 'ringseconds', seconds: 30 })).body);
+    assert.strictEqual(d.ringSeconds, 30);
+    assert.strictEqual((await appCall('adminkey12345', { action: 'ringseconds', seconds: 3 })).statusCode, 400);
+    const x = await ringXml('+19195551234');
+    assert.match(x, /timeout="30"/);
+    assert.match(x, /timeLimit="5400"/);
+  });
+
+  await test('usage cap: customers are stopped at their monthly limit and you are told once', async () => {
+    db.clear();
+    process.env.CUSTOMER_MONTHLY_CALLS = '2';
+    const notes = [];
+    const realSend = notify.send;
+    notify.send = async (o) => { notes.push(o.title); };
+    try {
+      const r = JSON.parse((await adminCall('adminkey12345', { action: 'create', name: 'Cap', cell: '9195550166' })).body);
+      const to = r.created.number;
+      const dial = () => call(voice, '/api/voice', { From: '+19195559999', To: to });
+      assert.match((await dial()).body, /<Gather/);
+      assert.match((await dial()).body, /<Gather/);
+      const over = await dial();
+      assert.match(over.body, /isn(&apos;|')t available right now/);
+      assert.doesNotMatch(over.body, /<Gather/);
+      await dial();
+      assert.strictEqual(notes.filter((n) => n === 'Call limit reached').length, 1, 'only one limit alert');
+      const mine = JSON.parse((await appCall(r.link.split('key=')[1], null)).body);
+      assert.strictEqual(mine.usage.cap, 2);
+      assert.strictEqual(mine.usage.count, 4);
+    } finally {
+      notify.send = realSend;
+      delete process.env.CUSTOMER_MONTHLY_CALLS;
+    }
+  });
+
+  await test('usage cap: your own calls are not limited by default', async () => {
+    db.clear();
+    for (let i = 0; i < 5; i++) assert.match((await call(voice, '/api/voice', { From: '+19195559998' })).body, /<Gather/);
+    const d = JSON.parse((await appCall('adminkey12345', null)).body);
+    assert.strictEqual(d.usage.cap, 0);
+    assert.strictEqual(d.usage.count, 5);
+  });
+
+  await test('missed call alert says the app did not answer when the app was the target', async () => {
+    db.clear();
+    await appCall('adminkey12345', { action: 'ringmode', mode: 'app' });
+    const sent = [];
+    const realSend = notify.send;
+    notify.send = async (o) => { sent.push(o.body); };
+    try {
+      const info = Buffer.from(JSON.stringify({ s: 'Test', c: 'person', f: '+19195551234' })).toString('base64url');
+      await call(dialDone, '/api/dial-done?i=' + info, { DialCallStatus: 'no-answer' });
+      assert.match(sent.join(' '), /Android app did not answer/);
+    } finally {
+      notify.send = realSend;
+    }
+  });
+
   console.log(failures ? `\n${failures} voicemail test(s) FAILED` : '\nAll voicemail tests passed');
   process.exit(failures ? 1 : 0);
 })();

@@ -45,7 +45,7 @@ object ContactsSync {
                     onDone("No contacts with phone numbers found")
                     return@Thread
                 }
-                val body = JSONObject().put("action", "import").put("entries", entries).toString()
+                val body = JSONObject().put("action", "import").put("entries", entries).put("skipRemoved", true).toString()
                 Api.request(app, "/api/app", body)
                 onDone("Synced " + entries.length() + " contacts")
             } catch (e: Exception) {

@@ -43,13 +43,21 @@ module.exports = async function handler(req, res) {
     return reply(res, vr);
   }
 
+  // If the app was the target and nothing answered, say so in the alert so you know where to look.
+  let appHint = '';
+  if (status !== 'canceled') {
+    try {
+      if ((await settings.ringMode(t)) !== 'phone') appHint = ' The Android app did not answer: check it has data or Wi-Fi and that notifications are allowed.';
+    } catch (_) {}
+  }
+
   const sorry = `Sorry, ${c.ownerName} isn't available right now.`;
 
   if (!(await settings.voicemailEnabled(t))) {
     sayTo(vr, c, `${sorry} Goodbye.`);
     vr.hangup();
     await calls.log({ ...entry, o: 'missed' }, ns);
-    await notify.send({ title: 'Missed call', body: `Missed call ${detail}`, ...tenant.notifyOpts(t) });
+    await notify.send({ title: 'Missed call', body: `Missed call ${detail}.${appHint}`, ...tenant.notifyOpts(t) });
     return reply(res, vr);
   }
 

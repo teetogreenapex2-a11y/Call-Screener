@@ -5,6 +5,8 @@ const contacts = require('../lib/contacts');
 const notify = require('../lib/notify');
 const tenant = require('../lib/tenant');
 const ring = require('../lib/ring');
+const usage = require('../lib/usage');
+const { sayTo } = require('../lib/twiml');
 const { VoiceResponse, buildGather, encodeInfo, reply, forbidden } = require('../lib/twiml');
 
 module.exports = async function handler(req, res) {
@@ -13,6 +15,16 @@ module.exports = async function handler(req, res) {
   const t = await tenant.forRequest(req);
   const c = cfg(t);
   const b = req.body || {};
+
+  // Monthly cap: past it, callers are told you are unavailable and nothing more is spent.
+  const u = await usage.record(t);
+  if (u.over) {
+    const vr = new VoiceResponse();
+    sayTo(vr, c, `Sorry, ${c.ownerName} isn't available right now. Goodbye.`);
+    vr.hangup();
+    if (u.justHit) await notify.send({ title: 'Call limit reached', body: `You have used all ${u.cap} screened calls for this month. Callers now hear that you are unavailable.`, ...tenant.notifyOpts(t) });
+    return reply(res, vr);
+  }
 
   // Saved contacts ring straight through. A caller ID that failed carrier verification (spoofed) does not get this.
   const spoofed = /^TN-Validation-Failed/i.test(String(b.StirVerstat || ''));

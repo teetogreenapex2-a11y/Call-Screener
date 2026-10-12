@@ -58,6 +58,7 @@ audio{width:100%;margin-top:8px}
   <section id="app" hidden>
     <h1>Call Screener</h1>
     <div class="sub" id="status"></div>
+    <div class="sub" id="usage"></div>
 
     <h2>Voicemail</h2>
     <div class="card row">
@@ -72,14 +73,18 @@ audio{width:100%;margin-top:8px}
       </div>
       <div class="sub" id="ringsub"></div>
       <div class="sub" id="appstatus" style="margin-top:8px;display:none"></div>
+      <div class="sub" style="margin-top:12px">Ring for how long before callers hear you are unavailable?</div>
+      <div class="chips" id="secchips" style="margin-top:6px">
+        <button class="chip" data-s="12">12 sec</button><button class="chip" data-s="18">18 sec</button><button class="chip" data-s="25">25 sec</button><button class="chip" data-s="35">35 sec</button><button class="chip" data-s="45">45 sec</button>
+      </div>
     </div>
 
     <h2>Setup</h2>
     <div class="card" id="setup" hidden>
       <div>Your screening number: <b id="mynum"></b></div>
-      <div class="sub" style="margin-top:8px">1. Tap each line on your phone to set up forwarding, then press call. Missed calls then go to the screener.</div>
+      <div class="sub" style="margin-top:8px" id="fwdtext"></div>
       <a class="code" id="f1"></a><a class="code" id="f2"></a><a class="code" id="f3"></a>
-      <div class="sub">To turn forwarding off, dial <b>##004#</b>.</div>
+      <div class="sub" id="fwdoff"></div>
       <div class="sub" style="margin-top:8px">2. Install the free <b>ntfy</b> app and subscribe to this topic to get call alerts:</div>
       <div class="code" id="topic"></div>
     </div>
@@ -156,6 +161,8 @@ audio{width:100%;margin-top:8px}
     $('vm').checked = d.voicemail;
     $('vmsub').textContent = d.voicemail ? 'Callers you miss can leave a message.' : 'Callers you miss hear a polite goodbye.';
     $('cn').textContent = d.contacts;
+    if (d.usage) $('usage').textContent = d.usage.cap ? 'Screened calls this month: ' + d.usage.count + ' of ' + d.usage.cap : 'Screened calls this month: ' + d.usage.count;
+    document.querySelectorAll('#secchips .chip').forEach(function (b) { b.classList.toggle('on', Number(b.getAttribute('data-s')) === d.ringSeconds); });
     document.querySelectorAll('#ringchips .chip').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-r') === d.ring); });
     $('ringsub').textContent = d.ring === 'app' ? 'Approved calls ring the Android app only. Needs data or Wi-Fi.' : d.ring === 'both' ? 'Approved calls ring your phone number and the app. Do not use this if you forward all calls to the screener.' : 'Approved calls ring your phone number.';
     var sy = $('synced');
@@ -169,8 +176,24 @@ audio{width:100%;margin-top:8px}
     if (d.me && d.me.number) {
       var n = String(d.me.number).replace(/\D/g, '').slice(-10);
       $('mynum').textContent = nice(n);
-      var codes = ['**61*+1' + n + '**20#', '**67*+1' + n + '#', '**62*+1' + n + '#'];
-      ['f1', 'f2', 'f3'].forEach(function (id, i) { $(id).textContent = codes[i]; $(id).href = 'tel:' + codes[i].replace(/#/g, '%23'); });
+      var codes, offTxt, introTxt;
+      if (d.ring === 'phone') {
+        codes = ['**61*+1' + n + '**20#', '**67*+1' + n + '#', '**62*+1' + n + '#'];
+        introTxt = '1. Tap each line on your phone to set up forwarding, then press call. Missed calls then go to the screener. (Works on AT&T and most carriers, but not on Red Pocket.)';
+        offTxt = 'To turn forwarding off, dial ##004#.';
+      } else {
+        codes = ['*21*+1' + n + '#', '*72' + n, ''];
+        introTxt = '1. Forward ALL your calls to the screener. Tap the first line and press call. If it fails, try the second one. Approved calls then ring this app, and saved contacts ring straight through.';
+        offTxt = 'To turn forwarding off, dial #21# (or *73 if you used the second code).';
+      }
+      ['f1', 'f2', 'f3'].forEach(function (id, i) {
+        var el = $(id);
+        el.style.display = codes[i] ? '' : 'none';
+        el.textContent = codes[i];
+        if (codes[i]) el.href = 'tel:' + codes[i].replace(/#/g, '%23').replace(/\*/g, '%2A');
+      });
+      $('fwdtext').textContent = introTxt;
+      $('fwdoff').textContent = offTxt;
       $('topic').textContent = d.me.ntfy || '';
       $('setup').hidden = false;
     }
@@ -233,10 +256,14 @@ audio{width:100%;margin-top:8px}
     b.onclick = function () { act({ action: 'ringmode', mode: b.getAttribute('data-r') }, 'Saved.'); };
   });
 
-  document.querySelectorAll('.chips:not(#ringchips) .chip').forEach(function (b) {
+  document.querySelectorAll('#secchips .chip').forEach(function (b) {
+    b.onclick = function () { act({ action: 'ringseconds', seconds: Number(b.getAttribute('data-s')) }, 'Saved.'); };
+  });
+
+  document.querySelectorAll('.chips:not(#ringchips):not(#secchips) .chip').forEach(function (b) {
     b.onclick = function () {
       FILTER = b.getAttribute('data-f');
-      document.querySelectorAll('.chips:not(#ringchips) .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
+      document.querySelectorAll('.chips:not(#ringchips):not(#secchips) .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
       drawCalls();
     };
   });
