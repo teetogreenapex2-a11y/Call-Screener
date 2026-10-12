@@ -13,7 +13,15 @@ object Prefs {
     }
 
     // A short line shown in the app: whether calls can reach this phone.
-    fun status(c: Context): String = sp(c).getString("status", "Starting...") ?: ""
+    fun status(c: Context): String {
+        val s = sp(c).getString("status", "Starting...") ?: ""
+        val p = sp(c).getString("push", "") ?: ""
+        return if (p.isEmpty()) "$s. No call push received yet" else "$s. $p"
+    }
+
+    fun setPush(c: Context, s: String) {
+        sp(c).edit().putString("push", s).apply()
+    }
 
     fun setStatus(c: Context, s: String) {
         sp(c).edit().putString("status", s).apply()

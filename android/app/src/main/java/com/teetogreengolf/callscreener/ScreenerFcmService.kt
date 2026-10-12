@@ -17,9 +17,11 @@ class ScreenerFcmService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        Prefs.setPush(applicationContext, "Last push received " + java.text.DateFormat.getTimeInstance().format(java.util.Date()) + " (" + data.size + " fields)")
         if (data.isEmpty()) return
-        Voice.handleMessage(applicationContext, data, object : MessageListener {
+        val handled = Voice.handleMessage(applicationContext, data, object : MessageListener {
             override fun onCallInvite(callInvite: CallInvite) {
+                Prefs.setPush(applicationContext, "Call invite received " + java.text.DateFormat.getTimeInstance().format(java.util.Date()))
                 CallManager.onInvite(applicationContext, callInvite)
             }
 
@@ -27,5 +29,6 @@ class ScreenerFcmService : FirebaseMessagingService() {
                 CallManager.onInviteCancelled(applicationContext)
             }
         })
+        if (!handled) Prefs.setPush(applicationContext, "Push was not a Twilio call message")
     }
 }
