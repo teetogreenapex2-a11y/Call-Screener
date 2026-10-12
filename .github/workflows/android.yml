@@ -24,9 +24,24 @@ jobs:
       - name: Build debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon
+      - name: Build signed Play Store bundle
+        working-directory: android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then echo "No upload key set up yet, skipping the Play Store bundle."; exit 0; fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          export UPLOAD_KEYSTORE_PATH="$RUNNER_TEMP/upload.jks"
+          gradle bundleRelease --no-daemon
+          rm -f "$RUNNER_TEMP/upload.jks"
       - name: Publish APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete apk-latest --yes --cleanup-tag || true
-          gh release create apk-latest android/app/build/outputs/apk/debug/app-debug.apk --title "Android app (latest)" --notes "Download app-debug.apk on your phone and install it."
+          FILES="android/app/build/outputs/apk/debug/app-debug.apk"
+          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then FILES="$FILES android/app/build/outputs/bundle/release/app-release.aab"; fi
+          gh release create apk-latest $FILES --title "Android app (latest)" --notes "app-debug.apk is for installing on your phone. app-release.aab (when present) is the file you upload to the Play Store."

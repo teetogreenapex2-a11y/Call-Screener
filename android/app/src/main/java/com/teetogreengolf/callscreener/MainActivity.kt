@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                     if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                     }
                 }
             } catch (_: Exception) {

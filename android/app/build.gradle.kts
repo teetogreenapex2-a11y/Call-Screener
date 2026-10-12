@@ -16,7 +16,7 @@ android {
         applicationId = "com.teetogreengolf.callscreener"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1.0"
         buildConfigField("String", "BASE_URL", "\"${project.property("BASE_URL")}\"")
     }
@@ -31,9 +31,23 @@ android {
         }
     }
 
+    // Play Store upload key: only used when the build is given these values (see android/PLAY_STORE.md).
+    val uploadKeystore = System.getenv("UPLOAD_KEYSTORE_PATH")
+    if (!uploadKeystore.isNullOrEmpty() && file(uploadKeystore).exists()) {
+        signingConfigs {
+            create("upload") {
+                storeFile = file(uploadKeystore)
+                storePassword = System.getenv("UPLOAD_STORE_PASSWORD")
+                keyAlias = System.getenv("UPLOAD_KEY_ALIAS")
+                keyPassword = System.getenv("UPLOAD_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("upload")?.let { signingConfig = it }
         }
     }
 
